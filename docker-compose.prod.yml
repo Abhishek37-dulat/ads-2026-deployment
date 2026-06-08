@@ -1,0 +1,41 @@
+# Production overrides — use together with the base file:
+#   docker compose --env-file .env -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+#
+# Adds HTTPS (443) + Let's Encrypt (certbot), serves the admin console at admin.d0187.in (root),
+# and builds the SPAs for same-origin production use.
+
+services:
+  # admin built WITHOUT a basePath → served at the root of admin.d0187.in
+  admin-ui:
+    build:
+      args:
+        NEXT_BASE_PATH: ""
+
+  # frontend stays same-origin (relative API calls); no override needed beyond clarity
+  frontend:
+    build:
+      args:
+        NEXT_PUBLIC_API_BASE_URL: ""
+        NEXT_PUBLIC_WS_BASE_URL: ""
+
+  nginx:
+    ports: !override
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.prod.conf:/etc/nginx/nginx.conf:ro
+      - ./certbot/conf:/etc/letsencrypt
+      - ./certbot/www:/var/www/certbot
+    # reload every 6h so renewed certs are picked up without downtime
+    command: >
+      /bin/sh -c "while :; do sleep 6h & wait $${!}; nginx -s reload; done & nginx -g 'daemon off;'"
+
+  certbot:
+    image: certbot/certbot
+    container_name: relay-certbot
+    volumes:
+      - ./certbot/conf:/etc/letsencrypt
+      - ./certbot/www:/var/www/certbot
+    # auto-renew twice a day; issuance is done once via init-letsencrypt.sh
+    entrypoint: >
+      /bin/sh -c "trap exit TERM; while :; do certbot renew --webroot -w /var/www/certbot --quiet; sleep 12h & wait $${!}; done"

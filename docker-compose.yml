@@ -1,0 +1,235 @@
+name: relay
+
+# Relay stack. Config comes from deployment/.env (see .env.example).
+# nginx is the single public entry point on ${HTTP_PORT}; the app is same-origin behind it.
+
+services:
+  # ---------------------------------------------------------------- Postgres
+  postgres:
+    image: postgres:16-alpine
+    container_name: relay-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-relay}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-relay}
+      POSTGRES_DB: ${POSTGRES_DB:-relay}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ../db-postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-relay} -d ${POSTGRES_DB:-relay}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ---------------------------------------------------------------- Redis
+  redis:
+    image: redis:7-alpine
+    container_name: relay-redis
+    command: ["redis-server", "/usr/local/etc/redis/redis.conf"]
+    volumes:
+      - redisdata:/data
+      - ../db-redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ---------------------------------------------------------------- ClickHouse
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8-alpine
+    container_name: relay-clickhouse
+    environment:
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-relay}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-relay}
+      CLICKHOUSE_DB: ${CLICKHOUSE_DB:-relay}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    ulimits:
+      nofile: { soft: 262144, hard: 262144 }
+    volumes:
+      - chdata:/var/lib/clickhouse
+      - ../db-clickhouse/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:8123/ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  # ---------------------------------------------------------------- Kafka (KRaft)
+  kafka:
+    image: apache/kafka:3.9.0
+    container_name: relay-kafka
+    environment:
+      KAFKA_NODE_ID: "1"
+      KAFKA_PROCESS_ROLES: "broker,controller"
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka:9093"
+      KAFKA_LISTENERS: "PLAINTEXT://:9092,CONTROLLER://:9093"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:9092"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT"
+      KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+      KAFKA_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: "0"
+      KAFKA_LOG_DIRS: "/var/lib/kafka/data"
+    volumes:
+      - kafkadata:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+
+  # ---------------------------------------------------------------- Temporal
+  temporal:
+    image: temporalio/auto-setup:1.25.0
+    container_name: relay-temporal
+    depends_on:
+      postgres: { condition: service_healthy }
+    environment:
+      DB: postgres12
+      DB_PORT: "5432"
+      POSTGRES_USER: ${POSTGRES_USER:-relay}
+      POSTGRES_PWD: ${POSTGRES_PASSWORD:-relay}
+      POSTGRES_SEEDS: postgres
+      DBNAME: temporal
+      VISIBILITY_DBNAME: temporal_visibility
+    healthcheck:
+      test: ["CMD", "tctl", "--address", "temporal:7233", "cluster", "health"]
+      interval: 10s
+      timeout: 10s
+      retries: 15
+
+  temporal-ui:
+    image: temporalio/ui:2.31.2
+    container_name: relay-temporal-ui
+    depends_on:
+      temporal: { condition: service_started }
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_CORS_ORIGINS: http://localhost:${HTTP_PORT:-80}
+    ports:
+      - "8088:8080"
+
+  # ---------------------------------------------------------------- MinIO (S3)
+  minio:
+    image: minio/minio:latest
+    container_name: relay-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-relay}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-relay-secret}
+    ports:
+      - "9001:9001"
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  minio-setup:
+    image: minio/mc:latest
+    depends_on:
+      minio: { condition: service_healthy }
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 ${MINIO_ROOT_USER:-relay} ${MINIO_ROOT_PASSWORD:-relay-secret} &&
+      mc mb -p local/${RELAY_S3_BUCKET:-relay-creatives} &&
+      mc anonymous set download local/${RELAY_S3_BUCKET:-relay-creatives} || true;
+      exit 0;
+      "
+
+  # ---------------------------------------------------------------- Backend
+  backend:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: relay-backend
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      clickhouse: { condition: service_healthy }
+      kafka: { condition: service_healthy }
+      temporal: { condition: service_started }
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-relay}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-relay}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-relay}
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: "6379"
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      RELAY_CLICKHOUSE_URL: jdbc:clickhouse://clickhouse:8123/${CLICKHOUSE_DB:-relay}
+      RELAY_CLICKHOUSE_USER: ${CLICKHOUSE_USER:-relay}
+      RELAY_CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-relay}
+      RELAY_TEMPORAL_TARGET: temporal:7233
+      RELAY_S3_ENDPOINT: http://minio:9000
+      RELAY_S3_ACCESS_KEY: ${MINIO_ROOT_USER:-relay}
+      RELAY_S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-relay-secret}
+      RELAY_S3_BUCKET: ${RELAY_S3_BUCKET:-relay-creatives}
+      RELAY_AUTH_JWT_SECRET: ${RELAY_AUTH_JWT_SECRET:-relay-dev-secret-change-me-0123456789-abcdef}
+      RELAY_ADMIN_EMAIL: ${RELAY_ADMIN_EMAIL:-admin@relay.dev}
+      RELAY_ADMIN_PASSWORD: ${RELAY_ADMIN_PASSWORD:-admin12345}
+      RELAY_CORS_ORIGINS: ${RELAY_CORS_ORIGINS:-http://localhost,http://localhost:3000,http://localhost:8080}
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:8081}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-465}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      MAIL_FROM: ${MAIL_FROM:-no-reply@relay.dev}
+      FAST2SMS_API_KEY: ${FAST2SMS_API_KEY:-}
+    expose:
+      - "8080"
+    ports:
+      - "8080:8080"   # optional direct access (Swagger); the app uses nginx
+
+  # ---------------------------------------------------------------- Frontend
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-}
+        NEXT_PUBLIC_WS_BASE_URL: ${NEXT_PUBLIC_WS_BASE_URL:-}
+    container_name: relay-frontend
+    depends_on:
+      - backend
+    expose:
+      - "3000"
+
+  # ---------------------------------------------------------------- Admin console
+  admin-ui:
+    build:
+      context: ../admin-ui
+      dockerfile: Dockerfile
+      args:
+        NEXT_BASE_PATH: ${ADMIN_BASE_PATH:-/admin}
+    container_name: relay-admin-ui
+    expose:
+      - "3001"
+
+  # ---------------------------------------------------------------- nginx (public entry)
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: relay-nginx
+    depends_on:
+      - frontend
+      - backend
+      - admin-ui
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      - "${HTTP_PORT:-80}:80"
+
+volumes:
+  pgdata:
+  redisdata:
+  chdata:
+  kafkadata:
+  miniodata:
