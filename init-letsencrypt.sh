@@ -18,14 +18,15 @@ BUILDX_NO_DEFAULT_ATTESTATIONS=1 $COMPOSE build
 
 echo "▶ Creating a temporary self-signed cert so nginx can start…"
 mkdir -p "$LIVE" ./certbot/www
-docker run --rm -v "$(pwd)/certbot/conf:/etc/letsencrypt" certbot/certbot \
-  sh -c "apk add --no-cache openssl >/dev/null 2>&1 || true; \
-         openssl req -x509 -nodes -newkey rsa:2048 -days 1 \
-         -keyout /etc/letsencrypt/live/$PRIMARY/privkey.pem \
-         -out /etc/letsencrypt/live/$PRIMARY/fullchain.pem \
-         -subj '/CN=$PRIMARY'" || \
+if command -v openssl >/dev/null 2>&1; then
   openssl req -x509 -nodes -newkey rsa:2048 -days 1 \
     -keyout "$LIVE/privkey.pem" -out "$LIVE/fullchain.pem" -subj "/CN=$PRIMARY"
+else
+  docker run --rm --entrypoint openssl -v "$(pwd)/certbot/conf:/etc/letsencrypt" alpine/openssl \
+    req -x509 -nodes -newkey rsa:2048 -days 1 \
+    -keyout "/etc/letsencrypt/live/$PRIMARY/privkey.pem" \
+    -out "/etc/letsencrypt/live/$PRIMARY/fullchain.pem" -subj "/CN=$PRIMARY"
+fi
 
 echo "▶ Starting stack (nginx serves the ACME challenge)…"
 $COMPOSE up -d
