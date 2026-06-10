@@ -1,5 +1,9 @@
 # local secrets
 .env
+certbot/
+
+# one-time production backups
+relay-before-tenant-reset.sql
 
 # OS files
 .DS_Store

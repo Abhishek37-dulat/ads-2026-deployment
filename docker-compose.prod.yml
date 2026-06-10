@@ -5,6 +5,48 @@
 # and builds the SPAs for same-origin production use.
 
 services:
+  postgres:
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required}
+
+  clickhouse:
+    environment:
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:?CLICKHOUSE_USER is required}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD is required}
+      CLICKHOUSE_DB: ${CLICKHOUSE_DB:?CLICKHOUSE_DB is required}
+
+  temporal-ui:
+    ports: !override []
+
+  minio:
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?MINIO_ROOT_USER is required}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD is required}
+    ports: !override []
+
+  backend:
+    environment:
+      SPRING_PROFILES_ACTIVE: docker,prod
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      RELAY_CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD is required}
+      RELAY_S3_ACCESS_KEY: ${MINIO_ROOT_USER:?MINIO_ROOT_USER is required}
+      RELAY_S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD is required}
+      RELAY_AUTH_JWT_SECRET: ${RELAY_AUTH_JWT_SECRET:?RELAY_AUTH_JWT_SECRET is required}
+      RELAY_ADMIN_EMAIL: ${RELAY_ADMIN_EMAIL:?RELAY_ADMIN_EMAIL is required}
+      RELAY_ADMIN_PASSWORD: ${RELAY_ADMIN_PASSWORD:?RELAY_ADMIN_PASSWORD is required}
+      RELAY_CORS_ORIGINS: ${RELAY_CORS_ORIGINS:?RELAY_CORS_ORIGINS is required}
+      APP_BASE_URL: ${APP_BASE_URL:?APP_BASE_URL is required}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:?GOOGLE_CLIENT_ID is required}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:?GOOGLE_CLIENT_SECRET is required}
+      SMTP_HOST: ${SMTP_HOST:?SMTP_HOST is required}
+      SMTP_USER: ${SMTP_USER:?SMTP_USER is required}
+      SMTP_PASS: ${SMTP_PASS:?SMTP_PASS is required}
+      MAIL_FROM: ${MAIL_FROM:?MAIL_FROM is required}
+      FAST2SMS_API_KEY: ${FAST2SMS_API_KEY:?FAST2SMS_API_KEY is required}
+    ports: !override []
+
   # admin built WITHOUT a basePath → served at the root of admin.d0187.in
   admin-ui:
     build:

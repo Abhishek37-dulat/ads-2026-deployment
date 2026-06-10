@@ -33,6 +33,8 @@ GOOGLE_CLIENT_ID=...  GOOGLE_CLIENT_SECRET=...  GOOGLE_REDIRECT_URI=   # leave e
 SMTP_HOST=smtp.hostinger.com SMTP_PORT=465 SMTP_USER=... SMTP_PASS=... MAIL_FROM=...
 FAST2SMS_API_KEY=...
 ```
+Use strong generated values for every password and secret. Production startup rejects defaults,
+short secrets, localhost CORS origins, and a non-HTTPS `APP_BASE_URL`.
 `GOOGLE_REDIRECT_URI` empty is recommended: the backend derives
 `https://<host>/api/auth/google/callback` from the request, so all three domains work with the
 URIs you already registered in Google.
@@ -45,6 +47,35 @@ cd deployment
 This builds images, starts a temporary self-signed cert so nginx can boot, obtains the real
 Let's Encrypt cert for all three domains (webroot challenge), and reloads nginx. certbot then
 auto-renews every 12h; nginx reloads every 6h.
+
+The production override activates the `docker,prod` Spring profiles and publishes only nginx
+ports 80/443. Backend, Temporal UI, and MinIO remain on the internal Docker network.
+
+Before deploying the tenant-isolation migration, snapshot Postgres:
+```bash
+docker compose --env-file .env -f docker-compose.yml -f docker-compose.prod.yml \
+  exec -T postgres sh -c 'pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' \
+  > relay-before-tenant-reset.sql
+```
+The migration removes the seeded shared demo organization and its cascading users/data. Existing
+users must register again.
+
+Remove any seeded analytics facts from ClickHouse once during this rollout:
+```bash
+docker compose --env-file .env -f docker-compose.yml -f docker-compose.prod.yml \
+  exec -T clickhouse sh -c \
+  'clickhouse-client --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" --query \
+  "ALTER TABLE relay.metric_snapshot DELETE WHERE workspace_id = '"'"'22222222-2222-2222-2222-222222222222'"'"'"'
+docker compose --env-file .env -f docker-compose.yml -f docker-compose.prod.yml \
+  exec -T clickhouse sh -c \
+  'clickhouse-client --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" --query \
+  "ALTER TABLE relay.metric_daily DELETE WHERE workspace_id = '"'"'22222222-2222-2222-2222-222222222222'"'"'"'
+```
+
+Rotate the JWT, Google OAuth, database, MinIO, and admin credentials before bringing the hardened
+stack up. Changing an environment variable does not automatically change an existing Postgres or
+ClickHouse user's stored password; update those users with their database administration tools
+before restarting with the new values.
 
 > Test first without rate limits: `STAGING=1 ./init-letsencrypt.sh you@d0187.in`, then rerun with
 > `STAGING=0` once it works.
