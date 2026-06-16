@@ -138,7 +138,7 @@ services:
       /bin/sh -c "
       mc alias set local http://minio:9000 ${MINIO_ROOT_USER:-relay} ${MINIO_ROOT_PASSWORD:-relay-secret} &&
       mc mb -p local/${RELAY_S3_BUCKET:-relay-creatives} &&
-      mc anonymous set download local/${RELAY_S3_BUCKET:-relay-creatives} || true;
+      mc anonymous set none local/${RELAY_S3_BUCKET:-relay-creatives} || true;
       exit 0;
       "
 
@@ -178,6 +178,14 @@ services:
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-}
+      RELAY_CREDENTIAL_ENCRYPTION_KEY: ${RELAY_CREDENTIAL_ENCRYPTION_KEY:-}
+      RELAY_META_ENABLED: ${RELAY_META_ENABLED:-false}
+      RELAY_META_PUBLISH_ENABLED: ${RELAY_META_PUBLISH_ENABLED:-false}
+      META_APP_ID: ${META_APP_ID:-}
+      META_APP_SECRET: ${META_APP_SECRET:-}
+      META_LOGIN_CONFIG_ID: ${META_LOGIN_CONFIG_ID:-}
+      META_GRAPH_API_VERSION: ${META_GRAPH_API_VERSION:-v24.0}
+      META_WEBHOOK_VERIFY_TOKEN: ${META_WEBHOOK_VERIFY_TOKEN:-}
       SMTP_HOST: ${SMTP_HOST:-}
       SMTP_PORT: ${SMTP_PORT:-465}
       SMTP_USER: ${SMTP_USER:-}

@@ -30,6 +30,10 @@ RELAY_CORS_ORIGINS=https://d0187.in,https://www.d0187.in,https://admin.d0187.in
 POSTGRES_PASSWORD=<strong>   CLICKHOUSE_PASSWORD=<strong>   MINIO_ROOT_PASSWORD=<strong>
 # integrations (already provided)
 GOOGLE_CLIENT_ID=...  GOOGLE_CLIENT_SECRET=...  GOOGLE_REDIRECT_URI=   # leave empty → derived per-domain
+RELAY_CREDENTIAL_ENCRYPTION_KEY=<openssl rand -base64 32>
+RELAY_META_ENABLED=false RELAY_META_PUBLISH_ENABLED=false
+META_APP_ID=... META_APP_SECRET=... META_LOGIN_CONFIG_ID=... META_GRAPH_API_VERSION=v24.0
+META_WEBHOOK_VERIFY_TOKEN=<strong random value>
 SMTP_HOST=smtp.hostinger.com SMTP_PORT=465 SMTP_USER=... SMTP_PASS=... MAIL_FROM=...
 FAST2SMS_API_KEY=...
 ```
@@ -38,6 +42,21 @@ short secrets, localhost CORS origins, and a non-HTTPS `APP_BASE_URL`.
 `GOOGLE_REDIRECT_URI` empty is recommended: the backend derives
 `https://<host>/api/auth/google/callback` from the request, so all three domains work with the
 URIs you already registered in Google.
+
+### Meta Marketing API
+
+Create a Meta Business developer app with Marketing API and Facebook Login for Business. Configure:
+
+- OAuth redirect: `https://d0187.in/api/connections/meta/oauth/callback`
+- Webhook: `https://d0187.in/api/connections/meta/webhook`
+- Deauthorization: `https://d0187.in/api/connections/meta/deauthorize`
+- Data deletion: `https://d0187.in/api/connections/meta/data-deletion`
+- Privacy and terms: `https://d0187.in/privacy` and `https://d0187.in/terms`
+
+Request `ads_management`, `ads_read`, `business_management`, `pages_show_list`,
+`pages_read_engagement`, `pages_manage_ads`, `instagram_basic`, and `leads_retrieval`. Keep both Meta flags false until
+business verification, app review, and test-account validation pass. Enable connections/imports
+first, then enable publishing only after paused campaign creation is verified.
 
 ## 2. One-command TLS + bring-up
 ```bash
